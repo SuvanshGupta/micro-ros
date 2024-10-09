@@ -1,0 +1,130 @@
+void control_cb(const void *msg_in, const char *topic_name) {
+    // Check the topic name to determine what kind of message we received
+    if (strcmp(topic_name, "base_linear") == 0) {
+        // Linear velocity message received
+        const std_msgs__msg__Float32 *linear_velocity_msg = (const std_msgs__msg__Float32 *)msg_in;
+        custom_control_msg.linear_velocity = linear_velocity_msg->data;
+    } 
+    else if (strcmp(topic_name, "base_angular") == 0) {
+        // Angular velocity message received
+        const std_msgs__msg__Float32 *angular_velocity_msg = (const std_msgs__msg__Float32 *)msg_in;
+        custom_control_msg.angular_velocity = angular_velocity_msg->data * 2.0f; // Apply angular velocity factor
+    }
+    else if (strcmp(topic_name, "stop_motor") == 0) {
+        // Stop signal received
+        const std_msgs__msg__Bool *stop_signal_msg = (const std_msgs__msg__Bool *)msg_in;
+        stop_motors = stop_signal_msg->data;
+    }
+
+    // Always publish the combined message when a new value arrives
+    publish_custom_control_message();
+}
+
+Key Changes:
+
+    topic_name as an Argument:
+
+        You need to pass the topic name to the callback from the subscription initialization part of the code. When subscribing to a topic, you can define a custom callback function like this:
+
+        cpp
+
+        rclc_subscription_init_default(&sub_linear, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "base_linear");
+        rclc_subscription_init_default(&sub_angular, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "base_angular");
+        rclc_subscription_init_default(&sub_stop, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), "stop_motor");
+
+        rclc_executor_add_subscription(&executor, &sub_linear, &linear_msg, &control_cb, ON_NEW_DATA, "base_linear");
+        rclc_executor_add_subscription(&executor, &sub_angular, &angular_msg, &control_cb, ON_NEW_DATA, "base_angular");
+        rclc_executor_add_subscription(&executor, &sub_stop, &stop_msg, &control_cb, ON_NEW_DATA, "stop_motor");
+
+    No Type Support Check:
+        Instead of checking the type using rosidl_typesupport_c__get_message_type_support_handle, we assume that each subscription already handles the correct message type (because you define the message type when initializing the subscription). Therefore, you can safely cast the msg_in directly based on the topic.
+
+    Message Handling:
+        The callback checks the topic_name and updates the respective velocity or stop signal based on the topic. It ensures that the custom control message is updated correctly.
+
+Publisher for Combined Control Message
+
+Here’s the updated publish_custom_control_message function that publishes the custom message:
+
+cpp
+
+// Function to publish combined control message
+void publish_custom_control_message() {
+    // Get the current timestamp (in milliseconds)
+    custom_control_msg.timestamp.sec = millis() / 1000;
+    custom_control_msg.timestamp.nanosec = (millis() % 1000) * 1000000;
+
+    // Publish the custom message
+    rcl_publish(&custom_control_pub, &custom_control_msg, NULL);
+}
+
+Subscription Initialization:
+
+When you initialize the subscriptions, you can do it like this:
+
+cpp
+
+// Initialize subscriptions
+rclc_subscription_init_default(&sub_linear, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "base_linear");
+rclc_subscription_init_default(&sub_angular, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "base_angular");
+rclc_subscription_init_default(&sub_stop, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool), "stop_motor");
+
+// Add subscriptions to executor
+rclc_executor_add_subscription(&executor, &sub_linear, &linear_msg, &control_cb, ON_NEW_DATA, "base_linear");
+rclc_executor_add_subscription(&executor, &sub_angular, &angular_msg, &control_cb, ON_NEW_DATA, "base_angular");
+rclc_executor_add_subscription(&executor, &sub_stop, &stop_msg, &control_cb, ON_NEW_DATA, "stop_motor");
+
+Summary:
+
+    Topic-Specific Logic: Now, the callback function processes messages based on their topic name, and you can handle multiple topics using a single callback.
+    Cleaned-up Logic: The unnecessary type-checking has been removed, making the code more readable and efficient.
+    Flexible: You can easily extend this approach to add more topics or control signals.
+
+Let me know if you need any further adjustments or clarifications!
+You said:
+print its msg type
+ChatGPT said:
+ChatGPT
+
+To print the message type, you can include a logging statement or use Serial.print (since this is on an embedded system). Here’s a basic function to print out the message type for the current control message based on the topic_name.
+Printing the Message Type:
+
+    Use Serial.println for Embedded Systems: Since you're working with Micro-ROS in an Arduino environment, you can print the message type directly with Serial.println. For each topic, you'll know the message type based on the topic name (as they are predefined during subscription).
+
+    Example Code:
+
+Add this to your control_cb function to print out the message type:
+
+cpp
+
+void control_cb(const void *msg_in, const char *topic_name) {
+    if (strcmp(topic_name, "base_linear") == 0) {
+        const std_msgs__msg__Float32 *linear_velocity_msg = (const std_msgs__msg__Float32 *)msg_in;
+        custom_control_msg.linear_velocity = linear_velocity_msg->data;
+        Serial.println("Received message type: std_msgs/Float32 (linear velocity)");
+    } 
+    else if (strcmp(topic_name, "base_angular") == 0) {
+        const std_msgs__msg__Float32 *angular_velocity_msg = (const std_msgs__msg__Float32 *)msg_in;
+        custom_control_msg.angular_velocity = angular_velocity_msg->data * 2.0f;
+        Serial.println("Received message type: std_msgs/Float32 (angular velocity)");
+    }
+    else if (strcmp(topic_name, "stop_motor") == 0) {
+        const std_msgs__msg__Bool *stop_signal_msg = (const std_msgs__msg__Bool *)msg_in;
+        stop_motors = stop_signal_msg->data;
+        Serial.println("Received message type: std_msgs/Bool (stop signal)");
+    }
+
+    // Always publish the combined message when a new value arrives
+    publish_custom_control_message();
+}
+
+Breakdown:
+
+    For base_linear: It logs "Received message type: std_msgs/Float32 (linear velocity)".
+    For base_angular: It logs "Received message type: std_msgs/Float32 (angular velocity)".
+    For stop_motor: It logs "Received message type: std_msgs/Bool (stop signal)".
+
+This allows you to print out the type of message that was received whenever a new message is processed in the control_cb function.
+
+Let me know if you'd like to modify or extend this further!
+
