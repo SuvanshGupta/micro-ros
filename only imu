@@ -1,0 +1,137 @@
+#include <micro_ros_arduino.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+#include <utility/imumaths.h>
+#include <sensor_msgs/msg/imu.h>
+#include <rcl/rcl.h>
+#include <rclc/rclc.h>
+#include <rosidl_runtime_c/string_functions.h>  // Include for string functions
+
+#define LED_PIN 13
+
+// Define IMU sensor
+Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);
+
+// ROS variables
+rcl_node_t node;
+rcl_publisher_t imu_pub;
+sensor_msgs__msg__Imu imu_msg;
+rcl_timer_t timer;
+rclc_support_t support;
+rcl_allocator_t allocator;
+rclc_executor_t executor;
+
+#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){ error_loop(); }}
+#define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){} }
+
+// Error handling function
+void error_loop() {
+  while (1) {
+    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+    delay(100);
+  }
+}
+
+// Timer callback function to publish IMU data
+void timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
+  RCLC_UNUSED(last_call_time);
+  
+  // Process IMU data
+  sensors_event_t orientationData, angVelocityData, linearAccelData;
+  bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
+  bno.getEvent(&angVelocityData, Adafruit_BNO055::VECTOR_GYROSCOPE);
+  bno.getEvent(&linearAccelData, Adafruit_BNO055::VECTOR_LINEARACCEL);
+
+  // Convert Euler angles to radians
+  double roll = orientationData.orientation.x * M_PI / 180.0;
+  double pitch = orientationData.orientation.y * M_PI / 180.0;
+  double yaw = orientationData.orientation.z * M_PI / 180.0;
+
+  // Calculate quaternion from Euler angles
+  imu::Quaternion quat;
+  double cy = cos(yaw * 0.5);
+  double sy = sin(yaw * 0.5);
+  double cp = cos(pitch * 0.5);
+  double sp = sin(pitch * 0.5);
+  double cr = cos(roll * 0.5);
+  double sr = sin(roll * 0.5);
+
+  quat.w() = cr * cp * cy + sr * sp * sy;
+  quat.x() = sr * cp * cy - cr * sp * sy;
+  quat.y() = cr * sp * cy + sr * cp * sy;
+  quat.z() = cr * cp * sy - sr * sp * cy;
+
+  // Fill the IMU message
+  
+  imu_msg.orientation.x = quat.x();
+  imu_msg.orientation.y = quat.y();
+  imu_msg.orientation.z = quat.z();
+  imu_msg.orientation.w = quat.w();
+  
+  imu_msg.orientation_covariance[0] = 0.01;
+  imu_msg.orientation_covariance[4] = 0.01;
+  imu_msg.orientation_covariance[8] = 0.01;
+
+  imu_msg.angular_velocity.x = angVelocityData.gyro.x;
+  imu_msg.angular_velocity.y = angVelocityData.gyro.y;
+  imu_msg.angular_velocity.z = angVelocityData.gyro.z;
+  
+  imu_msg.angular_velocity_covariance[0] = 0.01;
+  imu_msg.angular_velocity_covariance[4] = 0.01;
+  imu_msg.angular_velocity_covariance[8] = 0.01;
+
+  imu_msg.linear_acceleration.x = linearAccelData.acceleration.x;
+  imu_msg.linear_acceleration.y = linearAccelData.acceleration.y;
+  imu_msg.linear_acceleration.z = linearAccelData.acceleration.z;
+  
+  imu_msg.linear_acceleration_covariance[0] = 0.01;
+  imu_msg.linear_acceleration_covariance[4] = 0.01;
+  imu_msg.linear_acceleration_covariance[8] = 0.01;
+
+  // Publish the IMU message
+  RCSOFTCHECK(rcl_publish(&imu_pub, &imu_msg, NULL));
+}
+
+void setup() {
+  Serial.begin(115200); // Ensure serial is initialized for debugging
+  set_microros_transports();
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);  
+  
+  delay(2000);
+
+  allocator = rcl_get_default_allocator();
+
+  // Initialize BNO055 sensor
+  if (!bno.begin()) {
+      Serial.println("Ooops, no BNO055 detected ... Check your wiring or I2C ADDR!");
+      error_loop();
+  }
+
+  // Initialize micro-ROS
+  RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+
+  // Create node
+  RCCHECK(rclc_node_init_default(&node, "micro_ros_arduino_node", "", &support));
+
+  // Create publisher
+  RCCHECK(rclc_publisher_init_default(
+    &imu_pub,
+    &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+    "imu/raw"));
+
+  // Create timer
+  const unsigned int timer_timeout = 100; // Publish every 100 ms
+  RCCHECK(rclc_timer_init_default(&timer, &support, RCL_MS_TO_NS(timer_timeout), timer_callback));
+
+  // Create executor
+  RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
+  RCCHECK(rclc_executor_add_timer(&executor, &timer));
+}
+
+void loop() {
+  delay(100);
+  RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100)));
+}
