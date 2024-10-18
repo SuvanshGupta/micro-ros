@@ -1,0 +1,121 @@
+#include <micro_ros_arduino.h>
+#include <std_msgs/msg/int16.h>  // for Int16 message type
+#include <nav_msgs/msg/odometry.h> // for Odometry message type
+#include <rcl/rcl.h>
+#include <rclc/rclc.h>
+
+#define LED_PIN 13
+
+// ROS messages
+std_msgs__msg__Int16 left_ticks_msg;
+std_msgs__msg__Int16 right_ticks_msg;
+nav_msgs__msg__Odometry combined_odometry_msg;
+
+// ROS Subscribers
+rcl_subscription_t left_ticks_sub;
+rcl_subscription_t right_ticks_sub;
+rcl_publisher_t odometry_pub;
+rcl_node_t node;
+rclc_support_t support;
+rcl_allocator_t allocator;
+rclc_executor_t executor;
+
+// Global variables to store received ticks
+int left_ticks = 0;
+int right_ticks = 0;
+
+#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){ error_loop(); }}
+#define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){} }
+
+// Error handling function
+void error_loop() {
+    while (1) {
+        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+        delay(100);
+    }
+}
+
+// Callback function for left ticks
+void left_ticks_callback(const void * msgin) {
+    const std_msgs__msg__Int16 * msg = (const std_msgs__msg__Int16 *)msgin;
+    left_ticks = msg->data;
+    // Update odometry when new left ticks are received
+    update_odometry();
+}
+
+// Callback function for right ticks
+void right_ticks_callback(const void * msgin) {
+    const std_msgs__msg__Int16 * msg = (const std_msgs__msg__Int16 *)msgin;
+    right_ticks = msg->data;
+    // Update odometry when new right ticks are received
+    update_odometry();
+}
+
+// Function to update and publish combined odometry
+void update_odometry() {
+    // Example calculation: Average distance traveled based on encoder ticks
+    double TICKS_PER_METER = 3100; // Define as needed
+    double distanceLeft = left_ticks / TICKS_PER_METER;
+    double distanceRight = right_ticks / TICKS_PER_METER;
+    double combinedDistance = (distanceLeft + distanceRight) / 2.0;
+
+    // Prepare odometry message
+    combined_odometry_msg.header.stamp = rcl_get_now(); // Use the current time for the header
+    combined_odometry_msg.header.frame_id = "odom";
+    combined_odometry_msg.child_frame_id = "base_link";
+    combined_odometry_msg.pose.pose.position.x = combinedDistance; // Example position
+    combined_odometry_msg.pose.pose.position.y = 0; // Set as required
+    combined_odometry_msg.pose.pose.position.z = 0; // Set as required
+
+    // Fill in other odometry fields as needed (e.g., orientation, velocity)
+    
+    // Publish the combined odometry message
+    RCSOFTCHECK(rcl_publish(&odometry_pub, &combined_odometry_msg, NULL));
+}
+
+void setup() {
+    Serial.begin(115200); // Ensure serial is initialized for debugging
+    set_microros_transports();
+
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, HIGH);  
+    
+    allocator = rcl_get_default_allocator();
+
+    // Initialize micro-ROS
+    RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+
+    // Create node
+    RCCHECK(rclc_node_init_default(&node, "odometry_node", "", &support));
+
+    // Create subscribers
+    RCCHECK(rclc_subscription_init_default(
+        &left_ticks_sub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16),
+        "left_ticks"));
+
+    RCCHECK(rclc_subscription_init_default(
+        &right_ticks_sub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16),
+        "right_ticks"));
+
+    // Create publisher for combined odometry
+    RCCHECK(rclc_publisher_init_default(
+        &odometry_pub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
+        "combined_odometry"));
+
+    // Create executor
+    RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator)); // 2 subscriptions
+    RCCHECK(rclc_executor_add_subscription(&executor, &left_ticks_sub, &left_ticks_msg, left_ticks_callback));
+    RCCHECK(rclc_executor_add_subscription(&executor, &right_ticks_sub, &right_ticks_msg, right_ticks_callback));
+}
+
+void loop() {
+    // Handle any incoming messages or callbacks
+    RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10)));
+    delay(10);
+}
